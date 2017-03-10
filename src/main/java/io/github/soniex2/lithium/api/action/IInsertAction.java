@@ -1,0 +1,7 @@
+package io.github.soniex2.lithium.api.action;
+
+/**
+ * @author soniex2
+ */
+public interface IInsertAction extends IAction {
+}

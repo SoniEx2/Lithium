@@ -1,0 +1,16 @@
+[
+{
+  "modid": "lithium",
+  "name": "Lithium API",
+  "description": "Lithium is a simple energy API",
+  "version": "${version}",
+  "mcversion": "${mcversion}",
+  "url": "",
+  "updateUrl": "",
+  "authorList": ["SoniEx2"],
+  "credits": "EnderIO, for being so bad it encouraged me to make my own energy API.",
+  "logoFile": "",
+  "screenshots": [],
+  "dependencies": []
+}
+]
