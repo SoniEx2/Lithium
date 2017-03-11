@@ -1,42 +1,116 @@
 package io.github.soniex2.lithium;
 
 import io.github.soniex2.lithium.api.CapabilityLithium;
+import io.github.soniex2.lithium.api.RefreshLithiumCapabilitiesEvent;
 import io.github.soniex2.lithium.api.action.IAction;
 import io.github.soniex2.lithium.api.action.IExtractAction;
 import io.github.soniex2.lithium.api.action.IInsertAction;
+import io.github.soniex2.lithium.api.energy.IEnergyAccessor;
 import io.github.soniex2.lithium.api.energy.IEnergyProvider;
 import io.github.soniex2.lithium.api.energy.IEnergyReceiver;
 import net.minecraft.tileentity.TileEntity;
 import net.minecraft.util.EnumFacing;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.world.World;
+import net.minecraftforge.event.AttachCapabilitiesEvent;
 import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
 import net.minecraftforge.fml.common.gameevent.TickEvent;
 
-import java.util.ConcurrentModificationException;
-import java.util.Queue;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 /**
  * @author soniex2
  */
 public class LithiumEvents {
+	private final Queue<TileEntity> delayedTileEntityAdditions = new ConcurrentLinkedQueue<TileEntity>();
+	private final Map<World, Queue<TileEntity>> delayedWorldTileEntities = Collections.synchronizedMap(new WeakHashMap<World, Queue<TileEntity>>());
+	private final Map<World, List<TileEntity>> energyNet = Collections.synchronizedMap(new WeakHashMap<World, List<TileEntity>>());
+
+	@SubscribeEvent
+	public void onLithiumUpdate(final RefreshLithiumCapabilitiesEvent event) {
+		delayedTileEntityAdditions.add(event.getTileEntity());
+	}
+
+	@SubscribeEvent
+	public void onAttachCapabilities(final AttachCapabilitiesEvent<TileEntity> event) {
+		TileEntity te = event.getObject();
+		// this is TOO SOON so we delay it
+		delayedTileEntityAdditions.add(te);
+	}
+
+	private void processDelayedTileEntities() {
+		TileEntity te = delayedTileEntityAdditions.peek();
+		while (te != null && te.isInvalid()) {
+			delayedTileEntityAdditions.remove();
+			te = delayedTileEntityAdditions.peek();
+		}
+		while (te != null && !te.isInvalid() && te.hasWorld()) {
+			delayedTileEntityAdditions.remove();
+			World w = te.getWorld();
+			synchronized (delayedWorldTileEntities) { // sadly it has to be done this way.
+				Queue<TileEntity> queue = delayedWorldTileEntities.get(w);
+				if (queue == null) {
+					delayedWorldTileEntities.put(w, queue = new ConcurrentLinkedQueue<TileEntity>());
+				}
+				queue.add(te);
+			}
+			te = delayedTileEntityAdditions.peek();
+		}
+	}
+
+	private void processDelayedWorld(World world) {
+		// at this point, all TEs *should* be ready.
+		Queue<TileEntity> queue = delayedWorldTileEntities.get(world);
+		if (queue == null) {
+			return;
+		}
+		List<TileEntity> temp = new ArrayList<TileEntity>();
+		for (TileEntity te : queue) {
+			if (te.isInvalid() || !te.hasWorld()) { // this CAN happen?
+				continue;
+			}
+			temp.add(te);
+		}
+		synchronized (energyNet) {
+			List<TileEntity> list = energyNet.get(world);
+			if (list == null) {
+				energyNet.put(world, list = new ArrayList<TileEntity>());
+			}
+			list.addAll(temp);
+		}
+	}
+
 	@SubscribeEvent
 	public void onWorldTick(final TickEvent.WorldTickEvent event) {
 		if (event.phase == TickEvent.Phase.END) {
+			processDelayedWorld(event.world);
+			processDelayedTileEntities();
+			List<TileEntity> energyTiles = energyNet.get(event.world);
+			if (energyTiles == null) {
+				return;
+			}
 			Queue<EnergyTransaction> queue = new ConcurrentLinkedQueue<EnergyTransaction>();
-			for (TileEntity te : event.world.loadedTileEntityList) {
+			Iterator<TileEntity> iter = energyTiles.iterator();
+			while (iter.hasNext()) {
+				TileEntity te = iter.next();
 				if (te.isInvalid() || !te.hasWorld()) {
+					iter.remove();
 					continue;
 				}
 				BlockPos pos = te.getPos();
 				if (!(event.world.isBlockLoaded(pos) && event.world.getWorldBorder().contains(pos))) {
+					iter.remove();
 					continue;
 				}
+				boolean hasCap = false;
 				for (EnumFacing side : EnumFacing.VALUES) {
 					IEnergyProvider from = te.getCapability(CapabilityLithium.ENERGY_PROVIDER, side);
 					if (from == null) {
 						continue;
 					}
+					hasCap = true;
 					IExtractAction maxExtract = from.extract(Integer.MAX_VALUE);
 					maxExtract.revert();
 					if (maxExtract.getEnergy() == 0) {
@@ -51,7 +125,7 @@ public class LithiumEvents {
 					if (target == null) {
 						continue;
 					}
-					// we could also wrap ForgeEnergy in an IEnergyReceiver if we really wanted to... but nah.
+					// we could also wrap Forge Energy in an IEnergyReceiver if we really wanted to... but nah.
 					IEnergyReceiver to = te.getCapability(CapabilityLithium.ENERGY_RECEIVER, side.getOpposite());
 					if (to == null) {
 						continue;
@@ -69,6 +143,10 @@ public class LithiumEvents {
 					IInsertAction inserted = to.receive(extracted.getEnergy());
 					assert extracted.getEnergy() == inserted.getEnergy();
 					queue.add(new EnergyTransaction(extracted, inserted));
+				}
+				if (!hasCap) {
+					// don't process TEs without the cap.
+					iter.remove();
 				}
 			}
 			// We want to try and commit EVERY transaction, except in the case of energy duplication/deletion.
