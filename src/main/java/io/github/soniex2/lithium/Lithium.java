@@ -9,7 +9,7 @@ import org.apache.logging.log4j.Logger;
 /**
  * @author soniex2
  */
-@Mod(modid = "lithium", name = "Lithium API", version = "1.0.0")
+@Mod(modid = "lithium", name = "Lithium API", version = "1.1.0")
 public class Lithium {
 	public static Logger logger;
 
