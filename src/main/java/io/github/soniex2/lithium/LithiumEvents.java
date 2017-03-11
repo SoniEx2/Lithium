@@ -13,11 +13,12 @@ import net.minecraft.util.EnumFacing;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.World;
 import net.minecraftforge.event.AttachCapabilitiesEvent;
+import net.minecraftforge.fml.common.FMLCommonHandler;
 import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
 import net.minecraftforge.fml.common.gameevent.TickEvent;
+import net.minecraftforge.fml.relauncher.Side;
 
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 /**
@@ -27,6 +28,7 @@ public class LithiumEvents {
 	private final Queue<TileEntity> delayedTileEntityAdditions = new ConcurrentLinkedQueue<TileEntity>();
 	private final Map<World, Queue<TileEntity>> delayedWorldTileEntities = Collections.synchronizedMap(new WeakHashMap<World, Queue<TileEntity>>());
 	private final Map<World, List<TileEntity>> energyNet = Collections.synchronizedMap(new WeakHashMap<World, List<TileEntity>>());
+	private final Queue<TileEntity> whatTheHell = new ConcurrentLinkedQueue<TileEntity>(); // TODO
 
 	@SubscribeEvent
 	public void onLithiumUpdate(final RefreshLithiumCapabilitiesEvent event) {
@@ -35,6 +37,10 @@ public class LithiumEvents {
 
 	@SubscribeEvent
 	public void onAttachCapabilities(final AttachCapabilitiesEvent<TileEntity> event) {
+		if (FMLCommonHandler.instance().getEffectiveSide() == Side.CLIENT) {
+			// no enet on the client
+			return;
+		}
 		TileEntity te = event.getObject();
 		// this is TOO SOON so we delay it
 		delayedTileEntityAdditions.add(te);
@@ -46,15 +52,19 @@ public class LithiumEvents {
 			delayedTileEntityAdditions.remove();
 			te = delayedTileEntityAdditions.peek();
 		}
-		while (te != null && !te.isInvalid() && te.hasWorld()) {
+		while (te != null && !te.isInvalid()) {
 			delayedTileEntityAdditions.remove();
-			World w = te.getWorld();
-			synchronized (delayedWorldTileEntities) { // sadly it has to be done this way.
-				Queue<TileEntity> queue = delayedWorldTileEntities.get(w);
-				if (queue == null) {
-					delayedWorldTileEntities.put(w, queue = new ConcurrentLinkedQueue<TileEntity>());
+			if (!te.hasWorld()) {
+				whatTheHell.add(te);
+			} else {
+				World w = te.getWorld();
+				synchronized (delayedWorldTileEntities) { // sadly it has to be done this way.
+					Queue<TileEntity> queue = delayedWorldTileEntities.get(w);
+					if (queue == null) {
+						delayedWorldTileEntities.put(w, queue = new ConcurrentLinkedQueue<TileEntity>());
+					}
+					queue.add(te);
 				}
-				queue.add(te);
 			}
 			te = delayedTileEntityAdditions.peek();
 		}
@@ -84,6 +94,9 @@ public class LithiumEvents {
 
 	@SubscribeEvent
 	public void onWorldTick(final TickEvent.WorldTickEvent event) {
+		if (event.world.isRemote) {
+			return;
+		}
 		if (event.phase == TickEvent.Phase.END) {
 			processDelayedWorld(event.world);
 			processDelayedTileEntities();
@@ -111,10 +124,10 @@ public class LithiumEvents {
 						if (from == null) {
 							continue;
 						}
-						hasCap = true;
 						if (from instanceof IEnergyAccessor) {
 							throw new IllegalStateException("Don't use IEnergyAccessors like that, " + te);
 						}
+						hasCap = true;
 						IExtractAction maxExtract = from.extract(Integer.MAX_VALUE);
 						maxExtract.revert();
 						if (maxExtract.getEnergy() == 0) {
@@ -130,7 +143,7 @@ public class LithiumEvents {
 							continue;
 						}
 						// we could also wrap Forge Energy in an IEnergyReceiver if we really wanted to... but nah.
-						IEnergyReceiver to = te.getCapability(CapabilityLithium.ENERGY_RECEIVER, side.getOpposite());
+						IEnergyReceiver to = target.getCapability(CapabilityLithium.ENERGY_RECEIVER, side.getOpposite());
 						if (to == null) {
 							continue;
 						}
@@ -149,7 +162,7 @@ public class LithiumEvents {
 						}
 						IInsertAction inserted = to.receive(extracted.getEnergy());
 						assert extracted.getEnergy() == inserted.getEnergy();
-						queue.add(new EnergyTransaction(extracted, inserted));
+						queue.add(new EnergyTransaction(extracted, inserted, te, target));
 					}
 					if (!hasCap) {
 						// don't process TEs without the cap.
@@ -177,14 +190,20 @@ public class LithiumEvents {
 	private class EnergyTransaction implements IAction {
 		private final IExtractAction extractAction;
 		private final IInsertAction insertAction;
+		private final TileEntity te;
+		private final TileEntity target;
 
-		public EnergyTransaction(IExtractAction extracted, IInsertAction inserted) {
+		public EnergyTransaction(IExtractAction extracted, IInsertAction inserted, TileEntity te, TileEntity target) {
 			this.extractAction = extracted;
 			this.insertAction = inserted;
+			this.te = te;
+			this.target = target;
 		}
 
 		@Override
 		public boolean commit() {
+			te.markDirty();
+			target.markDirty();
 			if (extractAction.commit()) {
 				if (insertAction.commit()) {
 					return true;
@@ -199,6 +218,8 @@ public class LithiumEvents {
 
 		@Override
 		public boolean revert() {
+			te.markDirty();
+			target.markDirty();
 			// We could just throw UnsupportedOperationException, but w/e.
 			if (insertAction.revert()) {
 				if (extractAction.revert()) {
