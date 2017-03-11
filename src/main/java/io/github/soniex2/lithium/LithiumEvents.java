@@ -1,5 +1,6 @@
 package io.github.soniex2.lithium;
 
+import com.google.common.collect.Sets;
 import io.github.soniex2.lithium.api.CapabilityLithium;
 import io.github.soniex2.lithium.api.RefreshLithiumCapabilitiesEvent;
 import io.github.soniex2.lithium.api.action.IAction;
@@ -27,7 +28,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 public class LithiumEvents {
 	private final Queue<TileEntity> delayedTileEntityAdditions = new ConcurrentLinkedQueue<TileEntity>();
 	private final Map<World, Queue<TileEntity>> delayedWorldTileEntities = Collections.synchronizedMap(new WeakHashMap<World, Queue<TileEntity>>());
-	private final Map<World, List<TileEntity>> energyNet = Collections.synchronizedMap(new WeakHashMap<World, List<TileEntity>>());
+	private final Map<World, Set<TileEntity>> energyNet = Collections.synchronizedMap(new WeakHashMap<World, Set<TileEntity>>());
 	private final Queue<TileEntity> whatTheHell = new ConcurrentLinkedQueue<TileEntity>();
 
 	@SubscribeEvent
@@ -89,11 +90,11 @@ public class LithiumEvents {
 			temp.add(te);
 		}
 		synchronized (energyNet) {
-			List<TileEntity> list = energyNet.get(world);
-			if (list == null) {
-				energyNet.put(world, list = new ArrayList<TileEntity>());
+			Set<TileEntity> set = energyNet.get(world);
+			if (set == null) {
+				energyNet.put(world, set = Sets.newConcurrentHashSet());
 			}
-			list.addAll(temp);
+			set.addAll(temp);
 		}
 	}
 
@@ -105,7 +106,7 @@ public class LithiumEvents {
 		if (event.phase == TickEvent.Phase.END) {
 			processDelayedWorld(event.world);
 			processDelayedTileEntities();
-			List<TileEntity> energyTiles = energyNet.get(event.world);
+			Set<TileEntity> energyTiles = energyNet.get(event.world);
 			if (energyTiles == null) {
 				return;
 			}
