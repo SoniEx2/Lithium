@@ -92,74 +92,84 @@ public class LithiumEvents {
 				return;
 			}
 			Queue<EnergyTransaction> queue = new ConcurrentLinkedQueue<EnergyTransaction>();
-			Iterator<TileEntity> iter = energyTiles.iterator();
-			while (iter.hasNext()) {
-				TileEntity te = iter.next();
-				if (te.isInvalid() || !te.hasWorld()) {
-					iter.remove();
-					continue;
-				}
-				BlockPos pos = te.getPos();
-				if (!(event.world.isBlockLoaded(pos) && event.world.getWorldBorder().contains(pos))) {
-					iter.remove();
-					continue;
-				}
-				boolean hasCap = false;
-				for (EnumFacing side : EnumFacing.VALUES) {
-					IEnergyProvider from = te.getCapability(CapabilityLithium.ENERGY_PROVIDER, side);
-					if (from == null) {
+			try {
+				Iterator<TileEntity> iter = energyTiles.iterator();
+				while (iter.hasNext()) {
+					TileEntity te = iter.next();
+					if (te.isInvalid() || !te.hasWorld()) {
+						iter.remove();
 						continue;
 					}
-					hasCap = true;
-					IExtractAction maxExtract = from.extract(Integer.MAX_VALUE);
-					maxExtract.revert();
-					if (maxExtract.getEnergy() == 0) {
-						// early exit for empty buffers
-						continue;
-					}
-					BlockPos targetPos = te.getPos().offset(side);
+					BlockPos pos = te.getPos();
 					if (!(event.world.isBlockLoaded(pos) && event.world.getWorldBorder().contains(pos))) {
+						iter.remove();
 						continue;
 					}
-					TileEntity target = event.world.getTileEntity(targetPos);
-					if (target == null) {
-						continue;
+					boolean hasCap = false;
+					for (EnumFacing side : EnumFacing.VALUES) {
+						IEnergyProvider from = te.getCapability(CapabilityLithium.ENERGY_PROVIDER, side);
+						if (from == null) {
+							continue;
+						}
+						hasCap = true;
+						if (from instanceof IEnergyAccessor) {
+							throw new IllegalStateException("Don't use IEnergyAccessors like that, " + te);
+						}
+						IExtractAction maxExtract = from.extract(Integer.MAX_VALUE);
+						maxExtract.revert();
+						if (maxExtract.getEnergy() == 0) {
+							// early exit for empty buffers
+							continue;
+						}
+						BlockPos targetPos = te.getPos().offset(side);
+						if (!(event.world.isBlockLoaded(pos) && event.world.getWorldBorder().contains(pos))) {
+							continue;
+						}
+						TileEntity target = event.world.getTileEntity(targetPos);
+						if (target == null) {
+							continue;
+						}
+						// we could also wrap Forge Energy in an IEnergyReceiver if we really wanted to... but nah.
+						IEnergyReceiver to = te.getCapability(CapabilityLithium.ENERGY_RECEIVER, side.getOpposite());
+						if (to == null) {
+							continue;
+						}
+						if (to instanceof IEnergyAccessor) {
+							throw new IllegalStateException("Don't use IEnergyAccessors like that, " + te);
+						}
+						IInsertAction maxInsert = to.receive(maxExtract.getEnergy());
+						maxInsert.revert();
+						if (maxInsert.getEnergy() == 0) {
+							continue;
+						}
+						IExtractAction extracted = from.extract(maxInsert.getEnergy());
+						if (extracted.getEnergy() == 0) {
+							extracted.revert();
+							continue;
+						}
+						IInsertAction inserted = to.receive(extracted.getEnergy());
+						assert extracted.getEnergy() == inserted.getEnergy();
+						queue.add(new EnergyTransaction(extracted, inserted));
 					}
-					// we could also wrap Forge Energy in an IEnergyReceiver if we really wanted to... but nah.
-					IEnergyReceiver to = te.getCapability(CapabilityLithium.ENERGY_RECEIVER, side.getOpposite());
-					if (to == null) {
-						continue;
+					if (!hasCap) {
+						// don't process TEs without the cap.
+						iter.remove();
 					}
-					IInsertAction maxInsert = to.receive(maxExtract.getEnergy());
-					maxInsert.revert();
-					if (maxInsert.getEnergy() == 0) {
-						continue;
-					}
-					IExtractAction extracted = from.extract(maxInsert.getEnergy());
-					if (extracted.getEnergy() == 0) {
-						extracted.revert();
-						continue;
-					}
-					IInsertAction inserted = to.receive(extracted.getEnergy());
-					assert extracted.getEnergy() == inserted.getEnergy();
-					queue.add(new EnergyTransaction(extracted, inserted));
 				}
-				if (!hasCap) {
-					// don't process TEs without the cap.
-					iter.remove();
+			} finally {
+				// We want to try and commit EVERY transaction, except in the case of energy duplication/deletion.
+				// (aka "except when we can't guarantee the consistency of the internal state anymore".)
+				// We also want to run this code even if the above code throws an exception.
+				RuntimeException e = null;
+				for (EnergyTransaction t : queue) {
+					if (!t.commit()) {
+						e = new ConcurrentModificationException("???");
+					}
 				}
-			}
-			// We want to try and commit EVERY transaction, except in the case of energy duplication/deletion.
-			// (aka "except when we can't guarantee the consistency of the internal state anymore".)
-			RuntimeException e = null;
-			for (EnergyTransaction t : queue) {
-				if (!t.commit()) {
-					e = new ConcurrentModificationException("???");
+				if (e != null) {
+					// but we still want to throw.
+					throw e;
 				}
-			}
-			if (e != null) {
-				// but we still want to throw.
-				throw e;
 			}
 		}
 	}

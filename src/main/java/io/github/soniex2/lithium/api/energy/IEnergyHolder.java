@@ -1,13 +1,31 @@
 package io.github.soniex2.lithium.api.energy;
 
 /**
+ * An energy container.
+ *
  * @author soniex2
  */
 public interface IEnergyHolder {
+	/**
+	 * Returns the maximum amount of energy the given slot can store.
+	 *
+	 * @param slot The slot.
+	 * @return The maximum amount of energy the given slot can store.
+	 */
 	public int getEnergyLimit(int slot);
 
+	/**
+	 * Returns the amount of energy currently in the slot.
+	 *
+	 * @param slot The slot.
+	 * @return The amount of energy currently in the slot.
+	 */
 	public int getCurrentEnergy(int slot);
 
-	// what do you mean I can have internal slots and energy monitors can monitor them separately?
+	/**
+	 * Returns the amout of slots in this energy container.
+	 *
+	 * @return The amount of slots in this energy container.
+	 */
 	public int getSlotCount();
 }
