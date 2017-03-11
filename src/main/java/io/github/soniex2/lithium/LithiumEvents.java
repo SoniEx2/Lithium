@@ -28,7 +28,7 @@ public class LithiumEvents {
 	private final Queue<TileEntity> delayedTileEntityAdditions = new ConcurrentLinkedQueue<TileEntity>();
 	private final Map<World, Queue<TileEntity>> delayedWorldTileEntities = Collections.synchronizedMap(new WeakHashMap<World, Queue<TileEntity>>());
 	private final Map<World, List<TileEntity>> energyNet = Collections.synchronizedMap(new WeakHashMap<World, List<TileEntity>>());
-	private final Queue<TileEntity> whatTheHell = new ConcurrentLinkedQueue<TileEntity>(); // TODO
+	private final Queue<TileEntity> whatTheHell = new ConcurrentLinkedQueue<TileEntity>();
 
 	@SubscribeEvent
 	public void onLithiumUpdate(final RefreshLithiumCapabilitiesEvent event) {
@@ -47,6 +47,11 @@ public class LithiumEvents {
 	}
 
 	private void processDelayedTileEntities() {
+		for (TileEntity wth : whatTheHell) {
+			if (!wth.isInvalid() && wth.hasWorld()) {
+				delayedTileEntityAdditions.add(wth); // try it once more
+			}
+		}
 		TileEntity te = delayedTileEntityAdditions.peek();
 		while (te != null && te.isInvalid()) {
 			delayedTileEntityAdditions.remove();
